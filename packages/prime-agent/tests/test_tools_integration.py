@@ -445,6 +445,26 @@ class TestWebAPIReportActivity:
             assert result["id"] == "activity-123"
             mock_api.report_activity.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_report_activity_invalid_type(self, mock_settings: Settings):
+        """report_activity rejects unknown activity type without API call."""
+        mock_api = AsyncMock(spec=TalosAPIClient)
+
+        with patch(
+            "talos_agent.tools.web_api._api", mock_api
+        ), patch("talos_agent.tools.web_api._settings", mock_settings):
+            from talos_agent.tools.web_api import report_activity
+
+            result = await report_activity(
+                type="unknown_action",
+                content="Hello world",
+                channel="X",
+            )
+
+            assert "error" in result
+            assert "Invalid activity type" in result["error"]
+            mock_api.report_activity.assert_not_called()
+
 
 class TestWebAPIApprovalWorkflow:
     """Test approval request and checking."""
@@ -518,7 +538,35 @@ class TestWebAPIRevenueReporting:
     @pytest.mark.asyncio
     async def test_report_revenue(self, mock_settings: Settings):
         """report_revenue submits earnings record."""
-        mock_api = AsyncMock()
+        mock_api = AsyncMock(spec=TalosAPIClient)
+        mock_api.report_revenue = AsyncMock(
+            return_value={"id": "revenue-record", "amount": 50.0}
+        )
+
+        valid_tx = "a" * 64
+        with patch(
+            "talos_agent.tools.web_api._api", mock_api
+        ), patch("talos_agent.tools.web_api._settings", mock_settings):
+            from talos_agent.tools.web_api import report_revenue
+
+            result = await report_revenue(
+                amount=50.0,
+                source="playbook_sale",
+                tx_hash=valid_tx,
+            )
+
+            assert result["id"] == "revenue-record"
+            mock_api.report_revenue.assert_called_once_with(
+                mock_settings.talos_id,
+                amount=50.0,
+                source="playbook_sale",
+                tx_hash=valid_tx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_report_revenue_empty_tx_hash(self, mock_settings: Settings):
+        """report_revenue allows empty or omitted tx_hash."""
+        mock_api = AsyncMock(spec=TalosAPIClient)
         mock_api.report_revenue = AsyncMock(
             return_value={"id": "revenue-record", "amount": 50.0}
         )
@@ -531,8 +579,67 @@ class TestWebAPIRevenueReporting:
             result = await report_revenue(
                 amount=50.0,
                 source="playbook_sale",
-                tx_hash="tx-2024-001",
             )
 
             assert result["id"] == "revenue-record"
-            mock_api.report_revenue.assert_called_once()
+            mock_api.report_revenue.assert_called_once_with(
+                mock_settings.talos_id,
+                amount=50.0,
+                source="playbook_sale",
+                tx_hash=None,
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalid_amount", [0.0, -1.0, -0.01])
+    async def test_report_revenue_rejects_non_positive_amount(
+        self, mock_settings: Settings, invalid_amount: float
+    ):
+        """report_revenue rejects amount <= 0 without API call."""
+        mock_api = AsyncMock(spec=TalosAPIClient)
+
+        with patch(
+            "talos_agent.tools.web_api._api", mock_api
+        ), patch("talos_agent.tools.web_api._settings", mock_settings):
+            from talos_agent.tools.web_api import report_revenue
+
+            result = await report_revenue(
+                amount=invalid_amount,
+                source="playbook_sale",
+                tx_hash="a" * 64,
+            )
+
+            assert "error" in result
+            assert "Revenue amount must be greater than zero" in result["error"]
+            mock_api.report_revenue.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "invalid_tx_hash",
+        [
+            "not-64-hex",
+            "g" * 64,
+            "a" * 63,
+            "a" * 65,
+            "tx-1234",
+        ],
+    )
+    async def test_report_revenue_rejects_malformed_tx_hash(
+        self, mock_settings: Settings, invalid_tx_hash: str
+    ):
+        """report_revenue rejects malformed tx_hash without API call."""
+        mock_api = AsyncMock(spec=TalosAPIClient)
+
+        with patch(
+            "talos_agent.tools.web_api._api", mock_api
+        ), patch("talos_agent.tools.web_api._settings", mock_settings):
+            from talos_agent.tools.web_api import report_revenue
+
+            result = await report_revenue(
+                amount=10.0,
+                source="playbook_sale",
+                tx_hash=invalid_tx_hash,
+            )
+
+            assert "error" in result
+            assert "Invalid tx_hash" in result["error"]
+            mock_api.report_revenue.assert_not_called()
